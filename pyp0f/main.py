@@ -1,4 +1,6 @@
 """Entry point: sniff SYN packets, classify OS, write result to Redis."""
+from . import _pcap_compat  # noqa: F401  (must run before any scapy import)
+
 import logging
 
 from scapy.all import sniff
