@@ -1,4 +1,16 @@
 """Entry point: sniff SYN packets, classify OS, write result to Redis."""
+import gc
+
+# Disabled as early as possible, before the heavy scapy/p0f-database imports
+# below run: with the collector off, loading them does not register their
+# (large, long-lived, read-only once loaded) objects into a GC generation
+# that a later collection cycle would otherwise walk - and, on the far side
+# of a fork(), touch the refcount of and so needlessly copy-on-write. See
+# main()/run_worker() for the other half of this (gc.freeze() and the
+# per-worker gc.enable()) - the pattern is the one Instagram documented for
+# their (also fork-based) application-server workers.
+gc.disable()
+
 from . import _pcap_compat  # noqa: F401  (must run before any scapy import)
 
 import logging
@@ -101,6 +113,13 @@ def make_shutdown_handler(sniffer: AsyncSniffer, sink: RedisSink) -> Callable:
 
 def run_worker(index: int) -> None:
     """Capture and classify one shard of traffic; blocks until stopped."""
+    # Undo the gc.disable() from module import time: freeze() in main() only
+    # ever exempts objects that already existed at that point (the loaded
+    # library/database) from future collection - everything a worker goes on
+    # to allocate at runtime still needs normal generational GC to catch any
+    # reference cycles, same as usual.
+    gc.enable()
+
     bpf_filter = shard_filter(config.BPF_FILTER, config.WORKERS, index)
     log.info("worker %d starting on iface=%s filter=%r", index, config.IFACE, bpf_filter)
 
@@ -138,6 +157,17 @@ def main() -> None:
         config.IFACE,
         config.P0F_DB_PATH,
     )
+
+    # Load the signature database now, in this (pre-fork) process, so its
+    # parsing happens once and every worker below shares the result via
+    # copy-on-write rather than each re-loading its own private copy.
+    fingerprint.preload()
+
+    # Collect once to clear out anything already garbage from the imports
+    # and the preload above, then exempt everything still alive (all of it
+    # long-lived and read-only from here on) from future collection cycles.
+    gc.collect()
+    gc.freeze()
 
     if config.WORKERS <= 1:
         run_worker(0)

@@ -19,6 +19,17 @@ _p0f_module.p0fdb = _p0f_module.p0fKnowledgeBase(config.P0F_DB_PATH)
 p0f = _p0f_module.p0f
 
 
+def preload() -> None:
+    """Force the (otherwise lazily-loaded on first use) database to load now.
+
+    Meant to be called once, before forking worker processes: the database
+    is parsed a single time and the result then shared with every worker via
+    copy-on-write, instead of each one independently loading and parsing its
+    own private copy after fork.
+    """
+    _p0f_module.p0fdb.get_base()
+
+
 def classify(packet) -> str | None:
     """Return a human-readable OS label for a captured SYN packet, or None."""
     try:
