@@ -25,3 +25,9 @@ REDIS_PORT = int(_env("PYP0F_REDIS_PORT", "6379"))
 REDIS_DB = int(_env("PYP0F_REDIS_DB", "0"))
 REDIS_KEY_PREFIX = _env("PYP0F_REDIS_KEY_PREFIX", "pyp0f:")
 REDIS_TTL_SECONDS = int(_env("PYP0F_REDIS_TTL_SECONDS", str(120 * 60)))
+
+# Writes are pipelined and flushed once BATCH_SIZE observations have piled up
+# or FLUSH_INTERVAL_SECONDS have passed since the last flush, whichever comes
+# first (the latter bounds staleness at low traffic volumes).
+REDIS_BATCH_SIZE = int(_env("PYP0F_REDIS_BATCH_SIZE", "50"))
+REDIS_FLUSH_INTERVAL_SECONDS = float(_env("PYP0F_REDIS_FLUSH_INTERVAL_SECONDS", "1"))

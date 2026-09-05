@@ -2,8 +2,9 @@
 from . import _pcap_compat  # noqa: F401  (must run before any scapy import)
 
 import logging
+import signal
 
-from scapy.all import sniff
+from scapy.sendrecv import AsyncSniffer
 from scapy.layers.inet import IP
 from scapy.layers.inet6 import IPv6
 
@@ -41,14 +42,29 @@ def main() -> None:
         config.P0F_DB_PATH,
     )
     # store=False is essential for a long-running process: by default scapy
-    # keeps every captured packet in memory for the lifetime of the sniff()
-    # call, which would grow without bound here.
-    sniff(
+    # keeps every captured packet in memory for the lifetime of the sniff
+    # session, which would grow without bound here.
+    #
+    # sniff() itself is a thin blocking wrapper around AsyncSniffer; using it
+    # directly means a stop signal (e.g. `docker stop`, which sends SIGTERM)
+    # can flush the last pending batch of writes instead of dropping it.
+    sniffer = AsyncSniffer(
         iface=config.IFACE,
         filter=config.BPF_FILTER,
         prn=handle_packet,
         store=False,
     )
+    sniffer.start()
+
+    def _shutdown(signum, _frame) -> None:
+        log.info("shutting down (signal %s)", signum)
+        sniffer.stop()
+        storage.flush()
+
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
+
+    sniffer.join()
 
 
 if __name__ == "__main__":
