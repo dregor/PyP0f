@@ -25,6 +25,13 @@ P0F_DB_PATH = _env("PYP0F_DB_PATH", "/app/p0f.fp")
 # under sustained production-like load.
 LOG_LEVEL = _env("PYP0F_LOG_LEVEL", "INFO")
 
+# Packet capture and classification is plain Python (via scapy), so a single
+# worker process is limited to one CPU core regardless of machine size.
+# WORKERS spawns that many independent capture processes instead, each
+# handling a disjoint slice of source addresses (see main.shard_filter) -
+# must be a power of 2 for the address-bit sharding to split evenly.
+WORKERS = int(_env("PYP0F_WORKERS", "1"))
+
 REDIS_HOST = _env("PYP0F_REDIS_HOST", "127.0.0.1")
 REDIS_PORT = int(_env("PYP0F_REDIS_PORT", "6379"))
 REDIS_DB = int(_env("PYP0F_REDIS_DB", "0"))

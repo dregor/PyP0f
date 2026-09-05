@@ -1,11 +1,17 @@
 from unittest.mock import Mock
 
+import pytest
 from scapy.layers.inet import IP, TCP
 from scapy.layers.inet6 import IPv6
 from scapy.packet import Raw
 
 from pyp0f import main as main_module
-from pyp0f.main import make_packet_handler, make_shutdown_handler, packet_source_ip
+from pyp0f.main import (
+    make_packet_handler,
+    make_shutdown_handler,
+    packet_source_ip,
+    shard_filter,
+)
 
 
 def test_packet_source_ip_ipv4():
@@ -86,3 +92,45 @@ def test_shutdown_handler_stops_sniffer_and_flushes_sink():
 
     sniffer.stop.assert_called_once()
     sink.flush.assert_called_once()
+
+
+def test_shard_filter_single_worker_is_unchanged():
+    assert shard_filter("tcp", 1, 0) == "tcp"
+
+
+def test_shard_filter_two_workers_are_distinct_and_use_both_address_families():
+    even = shard_filter("tcp", 2, 0)
+    odd = shard_filter("tcp", 2, 1)
+
+    assert even != odd
+    for expr in (even, odd):
+        assert "tcp" in expr
+        assert "ip[15]" in expr  # IPv4: last byte of the source address
+        assert "ip6[23]" in expr  # IPv6: last byte of the source address
+
+
+@pytest.mark.parametrize("workers", [2, 4, 8])
+def test_shard_filter_partitions_every_byte_value_exactly_once(workers):
+    # Mirrors the bitmask arithmetic a BPF filter would evaluate at runtime,
+    # to check the *scheme* (not just the string) actually partitions the
+    # full byte range with no gaps and no overlap between workers.
+    mask = workers - 1
+    owner_of = {}
+    for byte in range(256):
+        claimants = [idx for idx in range(workers) if (byte & mask) == idx]
+        assert len(claimants) == 1, f"byte {byte} claimed by {claimants}"
+        owner_of[byte] = claimants[0]
+
+    assert set(owner_of.values()) == set(range(workers))
+
+
+@pytest.mark.parametrize("workers", [3, 5, 6, 100])
+def test_shard_filter_rejects_non_power_of_two_worker_counts(workers):
+    with pytest.raises(ValueError):
+        shard_filter("tcp", workers, 0)
+
+
+def test_shard_filter_four_workers_uses_a_two_bit_mask():
+    expr = shard_filter("tcp", 4, 2)
+    assert "& 3" in expr
+    assert "= 2" in expr

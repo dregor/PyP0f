@@ -2,6 +2,8 @@
 from . import _pcap_compat  # noqa: F401  (must run before any scapy import)
 
 import logging
+import multiprocessing
+import os
 import signal
 from typing import Callable
 
@@ -26,6 +28,34 @@ def packet_source_ip(packet) -> str | None:
     if IPv6 in packet:
         return packet[IPv6].src
     return None
+
+
+def shard_filter(base_filter: str, workers: int, index: int) -> str:
+    """AND base_filter with a condition selecting ~1/workers of source IPs.
+
+    Packet classification is plain Python and therefore single-core no
+    matter the machine; running `workers` independent capture processes,
+    each restricted (at the kernel/BPF level, before a packet ever reaches
+    Python) to a disjoint slice of source addresses, is the only way to use
+    more than one core for it.
+
+    The split is on the low bits of the last address byte (source, checked
+    for IPv4 and IPv6 separately since they're unrelated header layouts) -
+    simple and even enough for load-splitting, but only correct for a
+    power-of-2 worker count, since a bitmask can't otherwise divide the
+    address space into equal, non-overlapping shares.
+    """
+    if workers <= 1:
+        return base_filter
+    if workers & (workers - 1) != 0:
+        raise ValueError("workers must be a power of 2")
+
+    mask = workers - 1
+    shard = (
+        f"((ip and (ip[15] & {mask}) = {index}) "
+        f"or (ip6 and (ip6[23] & {mask}) = {index}))"
+    )
+    return f"({base_filter}) and {shard}"
 
 
 def make_packet_handler(sink: RedisSink) -> Callable:
@@ -69,13 +99,14 @@ def make_shutdown_handler(sniffer: AsyncSniffer, sink: RedisSink) -> Callable:
     return _shutdown
 
 
-def main() -> None:
-    log.info(
-        "starting on iface=%s filter=%r db=%s",
-        config.IFACE,
-        config.BPF_FILTER,
-        config.P0F_DB_PATH,
-    )
+def run_worker(index: int) -> None:
+    """Capture and classify one shard of traffic; blocks until stopped."""
+    bpf_filter = shard_filter(config.BPF_FILTER, config.WORKERS, index)
+    log.info("worker %d starting on iface=%s filter=%r", index, config.IFACE, bpf_filter)
+
+    # A RedisSink (and the connection it owns) must be created here, inside
+    # the worker, not in the parent before forking - a connection made
+    # before fork() would end up shared and corrupted across workers.
     sink = RedisSink()
 
     # store=False is essential for a long-running process: by default scapy
@@ -87,7 +118,7 @@ def main() -> None:
     # can flush the last pending batch of writes instead of dropping it.
     sniffer = AsyncSniffer(
         iface=config.IFACE,
-        filter=config.BPF_FILTER,
+        filter=bpf_filter,
         prn=make_packet_handler(sink),
         store=False,
     )
@@ -98,6 +129,42 @@ def main() -> None:
     signal.signal(signal.SIGINT, shutdown)
 
     sniffer.join()
+
+
+def main() -> None:
+    log.info(
+        "starting: workers=%d iface=%s db=%s",
+        config.WORKERS,
+        config.IFACE,
+        config.P0F_DB_PATH,
+    )
+
+    if config.WORKERS <= 1:
+        run_worker(0)
+        return
+
+    workers = [
+        multiprocessing.Process(target=run_worker, args=(i,), name=f"pyp0f-worker-{i}")
+        for i in range(config.WORKERS)
+    ]
+    for w in workers:
+        w.start()
+
+    def _shutdown_all(signum, _frame) -> None:
+        log.info("shutting down (signal %s)", signum)
+        # Forward the same signal so each worker's own handler flushes its
+        # pending batch, rather than killing them outright.
+        for w in workers:
+            if w.pid:
+                os.kill(w.pid, signum)
+        for w in workers:
+            w.join()
+
+    signal.signal(signal.SIGTERM, _shutdown_all)
+    signal.signal(signal.SIGINT, _shutdown_all)
+
+    for w in workers:
+        w.join()
 
 
 if __name__ == "__main__":
