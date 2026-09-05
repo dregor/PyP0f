@@ -1,9 +1,13 @@
 """Thin wrapper around scapy's bundled p0f-compatible signature matcher."""
+import logging
+
 from scapy.config import conf
 
 from . import config
 
 import scapy.modules.p0f as _p0f_module
+
+log = logging.getLogger("pyp0f.fingerprint")
 
 # scapy.modules.p0f unconditionally sets conf.p0f_base to a default system
 # path (and builds its knowledge base from it) as a side effect of being
@@ -19,7 +23,8 @@ def classify(packet) -> str | None:
     """Return a human-readable OS label for a captured SYN packet, or None."""
     try:
         match = p0f(packet)
-    except Exception:
+    except Exception as exc:
+        log.debug("p0f matching raised %r for packet %s", exc, packet.summary())
         return None
 
     if not match:

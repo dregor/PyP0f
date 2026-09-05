@@ -20,6 +20,11 @@ BPF_FILTER = _env(
 # Path to the p0f.fp signature database (p0f v3 format).
 P0F_DB_PATH = _env("PYP0F_DB_PATH", "/app/p0f.fp")
 
+# DEBUG logs one line per classified packet and per Redis flush - useful
+# while testing against real or synthetic traffic, too noisy to leave on
+# under sustained production-like load.
+LOG_LEVEL = _env("PYP0F_LOG_LEVEL", "INFO")
+
 REDIS_HOST = _env("PYP0F_REDIS_HOST", "127.0.0.1")
 REDIS_PORT = int(_env("PYP0F_REDIS_PORT", "6379"))
 REDIS_DB = int(_env("PYP0F_REDIS_DB", "0"))

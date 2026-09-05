@@ -1,5 +1,7 @@
 # PyP0f
 
+[![tests](https://github.com/dregor/PyP0f/actions/workflows/test.yml/badge.svg)](https://github.com/dregor/PyP0f/actions/workflows/test.yml)
+
 A small, dependency-light passive TCP fingerprinting collector, built on
 [Scapy](https://scapy.net/)'s bundled p0f-v3-compatible signature matcher
 (`scapy.modules.p0f`) and the classic
@@ -35,6 +37,15 @@ All configuration is via environment variables (see `pyp0f/config.py`):
 | `PYP0F_REDIS_HOST` / `PYP0F_REDIS_PORT` / `PYP0F_REDIS_DB` | `127.0.0.1` / `6379` / `0` | Redis connection |
 | `PYP0F_REDIS_KEY_PREFIX` | `pyp0f:` | Prefix for written keys (`<prefix><ip>`) |
 | `PYP0F_REDIS_TTL_SECONDS` | `7200` | TTL applied to each written entry |
+| `PYP0F_REDIS_BATCH_SIZE` | `50` | Writes are pipelined and flushed once this many have piled up |
+| `PYP0F_REDIS_FLUSH_INTERVAL_SECONDS` | `1` | ...or once this long has passed since the last flush, whichever comes first |
+| `PYP0F_LOG_LEVEL` | `INFO` | Set to `DEBUG` to log every classified packet and every flush |
+
+An IP that was seen but could not be classified (no signature match, or an
+unexpected error while classifying) is still written, with an empty string
+as the label, rather than dropped - so a consumer of the Redis data can tell
+"seen, unclassified" apart from "never seen", and one bad packet never loses
+the rest of a batch.
 
 ## Running
 
@@ -48,6 +59,18 @@ docker run --rm --network host --cap-add NET_RAW --cap-add NET_ADMIN \
 
 Raw packet capture requires `NET_RAW`/`NET_ADMIN` (or `--privileged`) and,
 in practice, host networking to see real interface traffic.
+
+## Testing
+
+The test suite mocks out scapy's actual signature matching and uses
+[fakeredis](https://github.com/cunla/fakeredis-py) in place of a real Redis
+server, so it needs no network access, no capture privileges, and no real
+p0f.fp database:
+
+```bash
+pip install -r requirements-test.txt
+pytest
+```
 
 ## Status
 
