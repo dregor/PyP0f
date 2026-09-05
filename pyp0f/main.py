@@ -2,6 +2,8 @@
 import logging
 
 from scapy.all import sniff
+from scapy.layers.inet import IP
+from scapy.layers.inet6 import IPv6
 
 from . import config, fingerprint, storage
 
@@ -10,14 +12,23 @@ log = logging.getLogger("pyp0f")
 
 
 def handle_packet(packet) -> None:
-    if "IP" not in packet or "TCP" not in packet:
+    if "TCP" not in packet:
+        return
+
+    # p0f-style matching works on both address families; pick whichever
+    # network-layer header is actually present on this packet.
+    if IP in packet:
+        src = packet[IP].src
+    elif IPv6 in packet:
+        src = packet[IPv6].src
+    else:
         return
 
     os_label = fingerprint.classify(packet)
     if not os_label:
         return
 
-    storage.store(packet["IP"].src, os_label)
+    storage.store(src, os_label)
 
 
 def main() -> None:
